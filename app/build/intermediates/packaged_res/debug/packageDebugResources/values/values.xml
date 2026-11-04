@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bm_background">#F4F7F6</color>
+    <color name="ic_launcher_background">#0F766E</color>
+    <style name="Theme.BudgetMate" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/bm_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

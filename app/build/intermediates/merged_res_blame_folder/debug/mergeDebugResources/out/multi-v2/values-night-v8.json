@@ -1,0 +1,38 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.example.budgetmate.app-mergeDebugResources-55:/values-night-v8/values-night-v8.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\RAJENDRA\\AndroidStudioProjects\\bbbb\\app\\src\\main\\res\\values-night\\colors.xml",
+                    "from": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,103",
+                        "endColumns": "47,56",
+                        "endOffsets": "98,155"
+                    }
+                },
+                {
+                    "source": "C:\\Users\\RAJENDRA\\AndroidStudioProjects\\bbbb\\app\\src\\main\\res\\values-night\\themes.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endLines": "6",
+                        "endColumns": "12",
+                        "endOffsets": "377"
+                    },
+                    "to": {
+                        "startLines": "4",
+                        "startColumns": "4",
+                        "startOffsets": "160",
+                        "endLines": "8",
+                        "endColumns": "12",
+                        "endOffsets": "482"
+                    }
+                }
+            ]
+        }
+    ]
+}
