@@ -99,7 +99,8 @@ class BudgetViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- Assigning (the heart of zero-sum) ----------
 
-    /** Set the amount assigned to an envelope for [month]. Only money that is Ready to Assign can be added. */
+    /** Set the amount assigned to an envelope for [month].
+     *  Top-level envelopes are funded from Ready to Assign; child envelopes are funded from their parent envelope. */
     suspend fun setAssigned(envelopeId: Long, month: YearMonth, newAssigned: Long): String? {
         if (newAssigned < 0) return "Assigned amount cannot be negative."
         val acc = anchorAccountId() ?: return "Add an account first."
@@ -107,9 +108,23 @@ class BudgetViewModel(app: Application) : AndroidViewModel(app) {
         val line = snap.lines.firstOrNull { it.envelope.id == envelopeId } ?: return "Envelope not found."
         val delta = newAssigned - line.assigned
         if (delta == 0L) return null
-        if (delta > snap.readyToAssign) return "Only ${money(snap.readyToAssign)} is left to assign."
-        if (delta < 0 && line.available + delta < 0) return "That would leave the envelope negative. Move money to cover spending instead."
-        dao.addEntry(LedgerEntry(accountId = acc, envelopeId = envelopeId, type = EntryType.ALLOCATION, amount = delta, date = assignmentDate(month), note = "Assigned"))
+        val date = assignmentDate(month)
+        val parentId = line.envelope.parentId
+        if (parentId != null) {
+            val parent = snap.lines.firstOrNull { it.envelope.id == parentId } ?: return "Parent envelope not found."
+            if (delta > 0 && parent.available < delta)
+                return "${parent.envelope.name} only has ${money(parent.available.coerceAtLeast(0))} available. Lower the amount or move money into it first."
+            if (delta < 0 && line.available + delta < 0)
+                return "${line.envelope.name} only has ${money(line.available.coerceAtLeast(0))} to release back."
+            db.withTransaction {
+                dao.addEntry(LedgerEntry(accountId = acc, envelopeId = parentId, type = EntryType.ALLOCATION, amount = -delta, date = date, note = "To ${line.envelope.name}"))
+                dao.addEntry(LedgerEntry(accountId = acc, envelopeId = envelopeId, type = EntryType.ALLOCATION, amount = delta, date = date, note = "From ${parent.envelope.name}"))
+            }
+        } else {
+            if (delta > snap.readyToAssign) return "Only ${money(snap.readyToAssign)} is left to assign."
+            if (delta < 0 && line.available + delta < 0) return "That would leave the envelope negative. Move money to cover spending instead."
+            dao.addEntry(LedgerEntry(accountId = acc, envelopeId = envelopeId, type = EntryType.ALLOCATION, amount = delta, date = assignmentDate(month), note = "Assigned"))
+        }
         return null
     }
 
@@ -118,6 +133,11 @@ class BudgetViewModel(app: Application) : AndroidViewModel(app) {
         if (cents <= 0) return "Enter a positive amount."
         if (fromId == null && toId == null) return "Choose where the money should move."
         if (fromId == toId) return "Choose two different places."
+        if (toId != null) {
+            val toEnv = envelopes.value.firstOrNull { it.id == toId }
+            if (toEnv != null && toEnv.parentId != null)
+                return "Children are funded from their parent envelope. Choose the top-level parent or assign from it instead."
+        }
         val acc = anchorAccountId() ?: return "Add an account first."
         val snap = snapshot(month)
         val date = assignmentDate(month)
@@ -136,21 +156,41 @@ class BudgetViewModel(app: Application) : AndroidViewModel(app) {
         return null
     }
 
-    /** Repeat last month's assignments as far as Ready to Assign allows. Returns how many envelopes were funded. */
+    /** Repeat last month's assignments as far as money allows. Top-level envelopes draw from
+     *  Ready to Assign; child envelopes draw from their parent. Returns how many envelopes were funded. */
     suspend fun assignLikeLastMonth(month: YearMonth): Int {
         val acc = anchorAccountId() ?: return 0
         val prev = snapshot(month.minusMonths(1)).lines.associate { it.envelope.id to it.assigned }
-        val now = snapshot(month)
-        var ready = now.readyToAssign
+        val snap = snapshot(month)
+        val date = assignmentDate(month)
+        var ready = snap.readyToAssign
         var count = 0
+        // Track each envelope's own available so parents used repeatedly in the loop stay correct.
+        val ownAvailable = snap.lines.associate { it.envelope.id to it.available }.toMutableMap()
+        val byId = snap.lines.associate { it.envelope.id to it }
         db.withTransaction {
-            for (line in now.lines) {
+            for (line in snap.lines) {
                 val want = (prev[line.envelope.id] ?: 0L) - line.assigned
-                if (want <= 0 || ready <= 0) continue
-                val give = minOf(want, ready)
-                dao.addEntry(LedgerEntry(accountId = acc, envelopeId = line.envelope.id, type = EntryType.ALLOCATION, amount = give, date = assignmentDate(month), note = "Same as last month"))
-                ready -= give
-                count++
+                if (want <= 0) continue
+                val parentId = line.envelope.parentId
+                if (parentId != null) {
+                    val parent = byId[parentId] ?: continue
+                    val pot = ownAvailable[parentId] ?: 0L
+                    if (pot <= 0) continue
+                    val give = minOf(want, pot)
+                    dao.addEntry(LedgerEntry(accountId = acc, envelopeId = parentId, type = EntryType.ALLOCATION, amount = -give, date = date, note = "To ${line.envelope.name}"))
+                    dao.addEntry(LedgerEntry(accountId = acc, envelopeId = line.envelope.id, type = EntryType.ALLOCATION, amount = give, date = date, note = "From ${parent.envelope.name}"))
+                    ownAvailable[parentId] = pot - give
+                    ownAvailable[line.envelope.id] = (ownAvailable[line.envelope.id] ?: 0L) + give
+                    count++
+                } else {
+                    if (ready <= 0) continue
+                    val give = minOf(want, ready)
+                    dao.addEntry(LedgerEntry(accountId = acc, envelopeId = line.envelope.id, type = EntryType.ALLOCATION, amount = give, date = date, note = "Same as last month"))
+                    ready -= give
+                    ownAvailable[line.envelope.id] = (ownAvailable[line.envelope.id] ?: 0L) + give
+                    count++
+                }
             }
         }
         return count

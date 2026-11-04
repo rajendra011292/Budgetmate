@@ -57,7 +57,7 @@ fun BudgetScreen(
                             Text("${worst.envelope.name} is overspent by ${money(-worst.available)}", style = MaterialTheme.typography.titleMedium)
                             Text("Move money from another envelope to cover it.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        FilledTonalButton(onClick = { open(Sheet.Move(null, worst.envelope.id)) }) { Text("Cover") }
+                        FilledTonalButton(onClick = { open(Sheet.Move(null, worst.envelope.parentId ?: worst.envelope.id)) }) { Text("Cover") }
                     }
                 }
             }
@@ -72,8 +72,8 @@ fun BudgetScreen(
             }
             item { SectionTitle("Envelopes") }
             topLevel.forEach { top ->
-                item(key = "e${top.envelope.id}") { EnvelopeRow(top, 0) { open(Sheet.Assign(top.envelope.id)) } }
                 val kids = byParent[top.envelope.id].orEmpty()
+                item(key = "e${top.envelope.id}") { EnvelopeRow(top, 0, kids) { open(Sheet.Assign(top.envelope.id)) } }
                 if (kids.isNotEmpty()) {
                     items(kids, key = { "e${it.envelope.id}" }) { k ->
                         EnvelopeRow(k, 22) { open(Sheet.Assign(k.envelope.id)) }
@@ -163,18 +163,21 @@ private fun Legend(text: String, color: Color) {
 }
 
 @Composable
-private fun EnvelopeRow(line: EnvelopeLine, indent: Int, onClick: () -> Unit) {
+private fun EnvelopeRow(line: EnvelopeLine, indent: Int, children: List<EnvelopeLine> = emptyList(), onClick: () -> Unit) {
     val e = line.envelope
     val color = BM.palette[colorIndexFor(e.id)]
+    // Parents with children show the family total: parent + children money and spending.
+    val avail = line.available + children.sumOf { it.available }
+    val activity = line.activity + children.sumOf { it.activity }
     val availColor = when {
-        line.available < 0 -> BM.Bad
-        line.available == 0L -> MaterialTheme.colorScheme.onSurfaceVariant
+        avail < 0 -> BM.Bad
+        avail == 0L -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> BM.Good
     }
-    val base = line.available + line.activity
+    val base = avail + activity
     val ratio = when {
-        line.available < 0 -> 1f
-        base > 0 -> (line.activity.toFloat() / base).coerceIn(0f, 1f)
+        avail < 0 -> 1f
+        base > 0 -> (activity.toFloat() / base).coerceIn(0f, 1f)
         else -> 0f
     }
     Box(Modifier.padding(start = indent.dp)) {
@@ -182,17 +185,20 @@ private fun EnvelopeRow(line: EnvelopeLine, indent: Int, onClick: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 EmojiAvatar(emojiFor(e.name), color)
                 Column(Modifier.weight(1f)) {
-                    Text(e.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-                    Text("Assigned ${money(line.assigned)} · Spent ${money(line.activity)}", style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    Text(e.name + if (children.isNotEmpty()) "  💰${children.size}" else "", style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                    Text(
+                        "Assigned ${money(line.assigned)} · Spent ${money(activity)}" + if (children.isNotEmpty()) " (incl. children)" else "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1
+                    )
                 }
-                Pill(money(line.available), availColor)
+                Pill(money(avail), availColor)
             }
             Spacer(Modifier.height(10.dp))
             LinearProgressIndicator(
                 progress = { ratio },
                 modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50)),
-                color = if (line.available < 0) BM.Bad else color,
+                color = if (avail < 0) BM.Bad else color,
                 trackColor = color.copy(alpha = 0.15f)
             )
         }

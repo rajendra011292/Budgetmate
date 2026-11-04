@@ -115,7 +115,7 @@ private fun TransactionSheet(
         BmTextField(name, { name = it }, if (type == EntryType.INCOME) "Source (e.g. Salary)" else "What was it for?")
         ChipPicker("Account", accounts.map { it.id as Long? to it.name }, accountId) { accountId = it }
         if (type == EntryType.EXPENSE) {
-            ChipPicker("Envelope", envelopes.map { it.id as Long? to "${emojiFor(it.name)} ${it.name}" }, envelopeId) { envelopeId = it }
+            BmDropdown("Envelope", envelopes.map { it.id as Long? to "${emojiFor(it.name)} ${it.name}" }, envelopeId) { envelopeId = it }
             val line = snap.lines.firstOrNull { it.envelope.id == envelopeId }
             if (line != null && cents > line.available) {
                 Text("⚠️ ${line.envelope.name} has ${money(line.available.coerceAtLeast(0))}. This will overspend by ${money(cents - line.available.coerceAtLeast(0))} — cover it afterwards by moving money.",
@@ -305,28 +305,45 @@ private fun AssignSheet(
     val snap = remember(accounts, envelopes, entries, month) { computeSnapshot(accounts, envelopes, entries, month) }
     val line = snap.lines.firstOrNull { it.envelope.id == envelopeId }
     if (line == null) { LaunchedEffect(Unit) { close() }; return }
+    val children = snap.lines.filter { it.envelope.parentId == envelopeId }
+    val parentLine = line.envelope.parentId?.let { pid -> snap.lines.firstOrNull { it.envelope.id == pid } }
     val form = rememberForm(close)
     var name by remember { mutableStateOf(line.envelope.name) }
     var amount by remember { mutableStateOf(centsToInput(line.assigned)) }
     var confirmDelete by remember { mutableStateOf(false) }
     val monthLabel = month.format(DateTimeFormatter.ofPattern("MMMM", Locale.getDefault()))
     val newAssigned = parseAmount(amount)
-    val after = snap.readyToAssign - (newAssigned - line.assigned)
+    val delta = newAssigned - line.assigned
+    val familyAvailable = line.available + children.sumOf { it.available }
+    val familyActivity = line.activity + children.sumOf { it.activity }
+    val after = if (parentLine != null) parentLine.available - delta else snap.readyToAssign - delta
+    val source = if (parentLine != null) parentLine.envelope.name else "Ready to Assign"
 
     BmSheet("${emojiFor(line.envelope.name)} ${line.envelope.name}", close,
-        subtitle = "Available ${money(line.available)} · Spent in $monthLabel ${money(line.activity)}") {
+        subtitle = "Available ${money(familyAvailable)} · Spent in $monthLabel ${money(familyActivity)}" +
+            if (children.isNotEmpty()) " (incl. children)" else "") {
         AmountField(amount, { amount = it }, "Assigned in $monthLabel")
+        if (parentLine != null) {
+            Text("A child envelope is funded from ${parentLine.envelope.name} — not from Ready to Assign.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else if (children.isNotEmpty()) {
+            Text("${money(familyAvailable - line.available)} of this money sits in ${children.size} child envelope${if (children.size == 1) "" else "s"}. Their spending shows here too.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         Text(
             when {
-                after < 0 -> "That's ${money(-after)} more than you have. Lower the amount."
+                after < 0 -> "That's ${money(-after)} more than $source has. Lower the amount."
                 after == 0L -> "Perfect — every rupee has a job."
-                else -> "Ready to Assign after this: ${money(after)}"
+                else -> if (parentLine != null) "$source will have ${money(after)} left." else "Ready to Assign after this: ${money(after)}"
             },
             style = MaterialTheme.typography.bodyMedium,
             color = if (after < 0) BM.Bad else if (after == 0L) BM.Good else MaterialTheme.colorScheme.onSurfaceVariant
         )
-        if (snap.readyToAssign > 0) {
+        if (parentLine == null && snap.readyToAssign > 0) {
             SecondaryButton("Assign all remaining (${money(snap.readyToAssign)})", { amount = centsToInput(line.assigned + snap.readyToAssign) })
+        }
+        if (parentLine != null && parentLine.available > 0) {
+            SecondaryButton("Assign all ${parentLine.envelope.name} can give (${money(parentLine.available)})", { amount = centsToInput(line.assigned + parentLine.available) })
         }
         BmTextField(name, { name = it }, "Envelope name")
         ErrorText(form.error)
@@ -337,12 +354,14 @@ private fun AssignSheet(
             }
         })
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            SecondaryButton("Move money", { open(Sheet.Move(null, envelopeId)) }, Modifier.weight(1f))
+            SecondaryButton("Move money", { open(Sheet.Move(if (parentLine != null) envelopeId else null, envelopeId)) }, Modifier.weight(1f))
             SecondaryButton("Add expense", { open(Sheet.Transaction(EntryType.EXPENSE, envelopeId)) }, Modifier.weight(1f))
         }
-        SecondaryButton("Add child envelope", { open(Sheet.NewEnvelope(envelopeId)) }, Modifier.fillMaxWidth())
+        if (parentLine == null) {
+            SecondaryButton("Add child envelope", { open(Sheet.NewEnvelope(envelopeId)) }, Modifier.fillMaxWidth())
+        }
         SecondaryButton(
-            if (confirmDelete) "Tap again — remaining money returns to Ready to Assign" else "Delete envelope",
+            if (confirmDelete) "Tap again — remaining money returns to Ready to Assign, children become top-level" else "Delete envelope",
             onClick = { if (confirmDelete) form.submit { vm.deleteEnvelope(line.envelope); null } else confirmDelete = true },
             danger = true
         )
@@ -367,12 +386,12 @@ private fun MoveSheet(
     val fromOptions = listOf<Pair<Long?, String>>(null to "💵 Ready to Assign · ${money(snap.readyToAssign)}") +
         snap.lines.filter { it.envelope.id != to }.map { it.envelope.id as Long? to "${emojiFor(it.envelope.name)} ${it.envelope.name} · ${money(it.available)}" }
     val toOptions = listOf<Pair<Long?, String>>(null to "💵 Ready to Assign") +
-        snap.lines.filter { it.envelope.id != from }.map { it.envelope.id as Long? to "${emojiFor(it.envelope.name)} ${it.envelope.name} · ${money(it.available)}" }
+        snap.lines.filter { it.envelope.parentId == null && it.envelope.id != from }.map { it.envelope.id as Long? to "${emojiFor(it.envelope.name)} ${it.envelope.name} · ${money(it.available)}" }
 
     BmSheet("Move money", close, subtitle = "Re-balance without changing the total. Great for covering overspending.") {
         AmountField(amount, { amount = it })
-        ChipPicker("From", fromOptions, from) { from = it }
-        ChipPicker("To", toOptions, to) { to = it }
+        BmDropdown("From", fromOptions, from) { from = it }
+        BmDropdown("To", toOptions, to) { to = it }
         ErrorText(form.error)
         PrimaryButton(if (form.busy) "Moving…" else "Move", enabled = !form.busy, onClick = {
             form.submit { vm.moveMoney(from, to, parseAmount(amount), month) }
@@ -397,7 +416,7 @@ private fun RecurringSheet(vm: BudgetViewModel, accounts: List<Account>, envelop
         AmountField(amount, { amount = it })
         ChipPicker("Account", accounts.map { it.id as Long? to it.name }, accountId) { accountId = it }
         if (type == EntryType.EXPENSE) {
-            ChipPicker("Envelope", envelopes.map { it.id as Long? to "${emojiFor(it.name)} ${it.name}" }, envelopeId) { envelopeId = it }
+            BmDropdown("Envelope", envelopes.map { it.id as Long? to "${emojiFor(it.name)} ${it.name}" }, envelopeId) { envelopeId = it }
         }
         ChipPicker("Repeats", listOf("WEEKLY" to "Weekly", "MONTHLY" to "Monthly", "YEARLY" to "Yearly"), interval) { interval = it }
         ErrorText(form.error)
