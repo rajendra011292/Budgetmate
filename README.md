@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # BudgetMate — zero-sum budgeting (Android, Kotlin + Jetpack Compose)
 
 Open this folder in Android Studio (Koala+), let Gradle sync, run on a device/emulator (API 26+).
@@ -15,3 +16,7 @@ Open this folder in Android Studio (Koala+), let Gradle sync, run on a device/em
 * `data/Engine.kt` – pure zero-sum maths, formatting, parsing
 * `BudgetViewModel.kt` – all rules/validation
 * `ui/` – theme, components, sheets, screens
+=======
+# Budgetmate
+Budgeting app
+>>>>>>> e11c82a4414dd6f8df95bb706f54daf295ead335
